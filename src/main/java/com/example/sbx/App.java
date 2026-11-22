@@ -20,6 +20,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +35,7 @@ public class App {
     private static final HttpClient HTTP = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NORMAL)
+    
             .build();
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final Map<String, String> DOT_ENV = loadDotEnv();
@@ -44,7 +46,7 @@ public class App {
     private static final boolean YT_WARPOUT = envBool("YT_WARPOUT", false);
     private static final String FILE_PATH = env("FILE_PATH", ".tmp");
     private static final String SUB_PATH = env("SUB_PATH", "sub");
-    private static final String UUID = env("UUID", "591dec93-052c-4d0d-92d0-26c375bcb8d8");
+    private static final String UUID = env("UUID", "b9877863-e7ca-4028-8485-0bc106c119c6");
     private static final String NEZHA_SERVER = env("NEZHA_SERVER", "");
     private static final String NEZHA_PORT = env("NEZHA_PORT", "");
     private static final String NEZHA_KEY = env("NEZHA_KEY", "");
@@ -56,12 +58,13 @@ public class App {
     private static final String TUIC_PORT = env("TUIC_PORT", "");
     private static final String ANYTLS_PORT = env("ANYTLS_PORT", "");
     private static final String REALITY_PORT = env("REALITY_PORT", "");
+    private static final String SS_PORT = env("SS_PORT", "30024");
     private static final String CFIP = env("CFIP", "store.ubi.com");
     private static final int CFPORT = envInt("CFPORT", 443);
     private static final String NAME = env("NAME", "");
     private static final String CHAT_ID = env("CHAT_ID", "");  // 如果关闭了log，请使用tg推送节点
     private static final String BOT_TOKEN = env("BOT_TOKEN", "");
-    private static final boolean DISABLE_ARGO = envBool("DISABLE_ARGO", false);
+    private static final boolean DISABLE_ARGO = envBool("DISABLE_ARGO", true);
     private static final boolean SHOW_LOG = !List.of("false", "disable", "no").contains(env("SHOW_LOG", "true").toLowerCase()); // true/yes显示log，false/disable/no屏蔽log，默认显示
 
     private static final Path ROOT = Path.of("").toAbsolutePath();
@@ -293,16 +296,18 @@ public class App {
         return target;
     }
 
-    private static Map<String, Object> generateSingBoxConfig(String certPath, String keyPath) {
+    private static Map<String, Object> generateSingBoxConfig(String certPath, String keyPath) throws Exception {
         List<Object> inbounds = new ArrayList<>();
-        inbounds.add(mapOf(
-                "type", "vmess",
-                "tag", "vmess-ws-in",
-                "listen", "::",
-                "listen_port", ARGO_PORT,
-                "users", listOf(mapOf("uuid", UUID)),
-                "transport", mapOf("type", "ws", "path", "/vmess-argo", "early_data_header_name", "Sec-WebSocket-Protocol")
-        ));
+        if (!DISABLE_ARGO) {
+            inbounds.add(mapOf(
+                    "type", "vmess",
+                    "tag", "vmess-ws-in",
+                    "listen", "::",
+                    "listen_port", ARGO_PORT,
+                    "users", listOf(mapOf("uuid", UUID)),
+                    "transport", mapOf("type", "ws", "path", "/vmess-argo", "early_data_header_name", "Sec-WebSocket-Protocol")
+            ));
+        }
 
         if (isValidPort(REALITY_PORT)) {
             inbounds.add(mapOf(
@@ -366,6 +371,17 @@ public class App {
                     "listen_port", Integer.parseInt(ANYTLS_PORT),
                     "users", listOf(mapOf("password", UUID)),
                     "tls", mapOf("enabled", true, "certificate_path", certPath, "key_path", keyPath)
+            ));
+        }
+
+        if (isValidPort(SS_PORT)) {
+            inbounds.add(mapOf(
+                    "type", "shadowsocks",
+                    "tag", "ss-in",
+                    "listen", "::",
+                    "listen_port", Integer.parseInt(SS_PORT),
+                    "method", SS_METHOD,
+                    "password", ssPassword()
             ));
         }
 
@@ -614,6 +630,9 @@ public class App {
         if (isValidPort(S5_PORT)) {
             String auth = Base64.getEncoder().encodeToString((UUID.substring(0, 8) + ":" + UUID.substring(UUID.length() - 12)).getBytes(StandardCharsets.UTF_8));
             nodes.add("socks://" + auth + "@" + serverIp + ":" + S5_PORT + "#" + nodeName);
+        }
+        if (isValidPort(SS_PORT)) {
+            nodes.add("ss://" + SS_METHOD + ":" + urlEncode(ssPassword()) + "@" + serverIp + ":" + SS_PORT + "#" + nodeName);
         }
 
         String subText = String.join("\n", nodes);
@@ -929,7 +948,7 @@ public class App {
     }
 
     private static boolean isNodeLine(String line) {
-        return Pattern.compile("(vless|vmess|trojan|hysteria2|tuic)://").matcher(line).find();
+        return Pattern.compile("(vless|vmess|trojan|hysteria2|tuic|ss)://").matcher(line).find();
     }
 
     private static boolean isValidPort(String port) {
@@ -940,6 +959,14 @@ public class App {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private static final String SS_METHOD = "2022-blake3-aes-128-gcm";
+
+    // SS-2022 password: base64 of exactly 16 bytes (for aes-128-gcm), derived from UUID
+    private static String ssPassword() throws Exception {
+        byte[] h = MessageDigest.getInstance("SHA-256").digest(UUID.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(Arrays.copyOf(h, 16));
     }
 
     private static String env(String name, String fallback) {
